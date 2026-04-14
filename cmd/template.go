@@ -1,18 +1,23 @@
 package cmd
 
-
-
 const mainTemplate = `package main
 
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 {{- if .Embed}}
 	"bytes"
+	_ "embed"
+{{- end}}
+{{- if .HasFileVolumes}}
 	_ "embed"
 {{- end}}
 )
@@ -24,7 +29,13 @@ var embedded_{{$sn}} []byte
 {{- end}}{{end}}{{end}}
 {{- end}}
 
+{{- range .FileVolumes}}
+//go:embed volumes/{{.SafeName}}
+var fileVolume_{{.SafeName}} []byte
+{{- end}}
+
 var containerNames []string
+var tmpDir string
 
 func main() {
 	sigs := make(chan os.Signal, 1)
@@ -33,17 +44,98 @@ func main() {
 		<-sigs
 		fmt.Println("\n[compose2exe] Stopping all containers...")
 		stopAll()
+		cleanup()
 		os.Exit(0)
 	}()
+
+	// Preflight checks
+	if err := preflight(); err != nil {
+		fmt.Fprintln(os.Stderr, "\n❌", err)
+		fmt.Fprintln(os.Stderr, "\n[compose2exe] Aborting.")
+		os.Exit(1)
+	}
+
+	// Extract embedded file volumes to temp dir
+	if err := extractVolumes(); err != nil {
+		fmt.Fprintln(os.Stderr, "[compose2exe] Error extracting volumes:", err)
+		os.Exit(1)
+	}
 
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "[compose2exe] Error:", err)
 		stopAll()
+		cleanup()
 		os.Exit(1)
 	}
 
 	fmt.Println("[compose2exe] All services running. Press Ctrl+C to stop.")
 	select {}
+}
+
+func preflight() error {
+	fmt.Println("[compose2exe] Checking environment...")
+
+	// Check Docker is installed
+	out, err := exec.Command("docker", "--version").Output()
+	if err != nil {
+		return fmt.Errorf("Docker is not installed or not found in PATH.\n  → Please install Docker Desktop from https://www.docker.com/products/docker-desktop/")
+	}
+	fmt.Println(" ✅ Docker found:", strings.TrimSpace(string(out)))
+
+	// Check Docker daemon is running
+	ping := exec.Command("docker", "info")
+	ping.Stdout = io.Discard
+	ping.Stderr = io.Discard
+	if ping.Run() != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("Docker Desktop is not running.\n  → Please open Docker Desktop and wait for it to start, then try again.")
+		}
+		return fmt.Errorf("Docker daemon is not running.\n  → Please run: sudo service docker start")
+	}
+	fmt.Println(" ✅ Docker daemon is running")
+
+	// Check required ports
+	ports := []string{ {{range .AllPorts}}"{{.}}", {{end}} }
+	for _, port := range ports {
+		p := port
+		if strings.Contains(p, ":") {
+			p = strings.Split(p, ":")[0]
+		}
+		ln, err := net.Listen("tcp", ":"+p)
+		if err != nil {
+			return fmt.Errorf("Port %s is already in use.\n  → Please stop the process using port %s and try again.", p, p)
+		}
+		ln.Close()
+		fmt.Printf(" ✅ Port %s is available\n", p)
+	}
+
+	fmt.Println("[compose2exe] Environment OK.")
+	return nil
+}
+
+func extractVolumes() error {
+	{{- if .HasFileVolumes}}
+	var err error
+	tmpDir, err = os.MkdirTemp("", "compose2exe-*")
+	if err != nil {
+		return err
+	}
+	{{- range .FileVolumes}}
+	path_{{.SafeName}} := filepath.Join(tmpDir, "{{.SafeName}}")
+	if err := os.WriteFile(path_{{.SafeName}}, fileVolume_{{.SafeName}}, 0644); err != nil {
+		return fmt.Errorf("cannot extract {{.OriginalName}}: %w", err)
+	}
+	fmt.Println("[compose2exe] Extracted volume file: {{.OriginalName}}")
+	_ = path_{{.SafeName}}
+	{{- end}}
+	{{- end}}
+	return nil
+}
+
+func cleanup() {
+	if tmpDir != "" {
+		os.RemoveAll(tmpDir)
+	}
 }
 
 func run() error {
@@ -111,7 +203,14 @@ func start_{{$sn}}() error {
 {{- range $k, $v := .EnvMap}}
 	args = append(args, "-e", "{{$k}}={{$v}}")
 {{- end}}
-{{- range .Volumes}}
+{{- range .Volumes}}{{$vol := .}}
+	{{- range $.FileVolumes}}{{if eq .OriginalVolume $vol}}
+	args = append(args, "-v", filepath.Join(tmpDir, "{{.SafeName}}")+":{{.MountPath}}")
+	{{- else}}{{end}}{{end}}
+	{{- range $.FileVolumes}}{{if eq .OriginalVolume $vol}}{{else}}
+	{{- end}}{{end}}
+{{- end}}
+{{- range .PlainVolumes}}
 	args = append(args, "-v", "{{.}}")
 {{- end}}
 {{- range .NetworkList}}

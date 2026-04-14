@@ -14,14 +14,15 @@ type ComposeFile struct {
 }
 
 type Service struct {
-	Image       string
-	Ports       []string
-	EnvMap      map[string]string
-	Volumes     []string
-	NetworkList []string
-	DependsList []string
-	Hostname    string
-	Restart     string
+	Image        string
+	Ports        []string
+	EnvMap       map[string]string
+	Volumes      []string
+	PlainVolumes []string // Volumes that are NOT embedded file volumes
+	NetworkList  []string
+	DependsList  []string
+	Hostname     string
+	Restart      string
 }
 
 type Network struct {
