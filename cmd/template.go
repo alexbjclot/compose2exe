@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+{{- if .HasFileVolumes}}
 	"path/filepath"
+{{- end}}
 	"runtime"
 	"strings"
 	"syscall"
