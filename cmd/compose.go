@@ -15,7 +15,8 @@ type ComposeFile struct {
 
 type Service struct {
 	Image        string
-	Build        string // build context path (e.g. "." or "./backend")
+	Build        string
+	AutoEmbed    bool // true when service uses build: and image is auto-embedded
 	Ports        []string
 	EnvMap       map[string]string
 	Volumes      []string

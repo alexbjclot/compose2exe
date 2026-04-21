@@ -10,6 +10,8 @@ import (
 	"text/template"
 )
 
+const maxEmbedSize = 2 * 1024 * 1024 * 1024 // 2 GB Go embed limit
+
 type Generator struct {
 	ComposePath string
 	Name        string
@@ -19,13 +21,12 @@ type Generator struct {
 	Module      string
 }
 
-// FileVolume represents a file-based volume to be embedded
 type FileVolume struct {
-	OriginalVolume string // e.g. "./mosquitto.conf:/mosquitto/config/mosquitto.conf"
-	OriginalName   string // e.g. mosquitto.conf
-	SafeName       string // e.g. mosquitto_conf
-	MountPath      string // e.g. /mosquitto/config/mosquitto.conf
-	HostPath       string // e.g. ./mosquitto.conf
+	OriginalVolume string
+	OriginalName   string
+	SafeName       string
+	MountPath      string
+	HostPath       string
 }
 
 func (g *Generator) Run() error {
@@ -36,7 +37,7 @@ func (g *Generator) Run() error {
 
 	composeDir := filepath.Dir(g.ComposePath)
 
-	// Build images for services that use build: instead of image:
+	// Step 1: Build images for services that use build:
 	for name, svc := range compose.Services {
 		if svc.Build != "" && svc.Image == "" {
 			imageName := fmt.Sprintf("%s:latest", sanitize(name))
@@ -49,29 +50,50 @@ func (g *Generator) Run() error {
 				return fmt.Errorf("docker build %s: %w", name, err)
 			}
 			svc.Image = imageName
+			svc.AutoEmbed = true // mark for automatic embed
 		}
 	}
 
-	// Detect file volumes
+	// Step 2: Detect file volumes
 	fileVolumes := detectFileVolumes(compose, composeDir)
 
-	// Create build dir
+	// Step 3: Create build dir
 	buildDir, err := os.MkdirTemp("", "compose2exe-*")
 	if err != nil {
 		return fmt.Errorf("cannot create build dir: %w", err)
 	}
 	defer os.RemoveAll(buildDir)
 
-	// Init Go module
+	// Step 4: Init Go module
 	fmt.Printf("go mod init %s\n", g.Module)
 	if err := runCmd(buildDir, "go", "mod", "init", g.Module); err != nil {
 		return fmt.Errorf("go mod init: %w", err)
 	}
 
-	// Embed images if requested
-	if g.Embed {
-		for name, svc := range compose.Services {
+	// Step 5: Embed images
+	// - Always embed services with build: (AutoEmbed)
+	// - Embed all services if --embed flag is set
+	// - Check size limit before embedding
+	embedServices := make(map[string]bool)
+	for name, svc := range compose.Services {
+		if svc.AutoEmbed || g.Embed {
 			if svc.Image == "" {
+				continue
+			}
+			// Check image size before embedding
+			size, err := getImageSize(svc.Image)
+			if err != nil {
+				fmt.Printf("Warning: cannot check size of %s: %v\n", svc.Image, err)
+			}
+			if size > maxEmbedSize {
+				if svc.AutoEmbed {
+					return fmt.Errorf(
+						"service '%s' uses build: but the resulting image is too large to embed (%.1f GB > 2 GB limit).\n"+
+							"  → Push the image to a registry and use image: instead of build:",
+						name, float64(size)/1024/1024/1024,
+					)
+				}
+				fmt.Printf("Warning: skipping embed for %s (%.1f GB > 2 GB limit)\n", name, float64(size)/1024/1024/1024)
 				continue
 			}
 			tarName := fmt.Sprintf("%s.tar.gz", sanitize(name))
@@ -79,10 +101,11 @@ func (g *Generator) Run() error {
 			if err := runDockerSave(svc.Image, filepath.Join(buildDir, tarName)); err != nil {
 				return fmt.Errorf("docker save %s: %w", svc.Image, err)
 			}
+			embedServices[name] = true
 		}
 	}
 
-	// Copy file volumes into build dir under volumes/
+	// Step 6: Copy file volumes
 	if len(fileVolumes) > 0 {
 		volDir := filepath.Join(buildDir, "volumes")
 		if err := os.MkdirAll(volDir, 0755); err != nil {
@@ -93,7 +116,6 @@ func (g *Generator) Run() error {
 			dst := filepath.Join(volDir, fv.SafeName)
 			fmt.Printf("Embedding file volume: %s\n", fv.OriginalName)
 			if err := copyFile(src, dst); err != nil {
-				// If file doesn't exist, create empty
 				fmt.Printf("  (file not found, creating empty: %s)\n", fv.OriginalName)
 				if err2 := os.WriteFile(dst, []byte{}, 0644); err2 != nil {
 					return err2
@@ -102,16 +124,16 @@ func (g *Generator) Run() error {
 		}
 	}
 
-	// Collect all ports for preflight
+	// Step 7: Collect ports for preflight
 	allPorts := collectPorts(compose)
 
-	// Separate plain volumes from file volumes per service
+	// Step 8: Separate plain volumes from file volumes per service
 	for _, svc := range compose.Services {
 		svc.PlainVolumes = filterPlainVolumes(svc.Volumes, fileVolumes)
 	}
 
-	// Generate main.go
-	mainGo, err := g.renderMain(compose, fileVolumes, allPorts)
+	// Step 9: Generate main.go
+	mainGo, err := g.renderMain(compose, fileVolumes, allPorts, embedServices)
 	if err != nil {
 		return fmt.Errorf("render main.go: %w", err)
 	}
@@ -119,11 +141,10 @@ func (g *Generator) Run() error {
 		return fmt.Errorf("write main.go: %w", err)
 	}
 
-	// go get
+	// Step 10: go get + build
 	fmt.Println("go get")
 	runCmd(buildDir, "go", "get")
 
-	// Build
 	if err := os.MkdirAll(g.Output, 0755); err != nil {
 		return err
 	}
@@ -153,7 +174,7 @@ func (g *Generator) Run() error {
 	return nil
 }
 
-func (g *Generator) renderMain(compose *ComposeFile, fileVolumes []FileVolume, allPorts []string) (string, error) {
+func (g *Generator) renderMain(compose *ComposeFile, fileVolumes []FileVolume, allPorts []string, embedServices map[string]bool) (string, error) {
 	tmpl, err := template.New("main").Funcs(template.FuncMap{
 		"sanitize": sanitize,
 	}).Parse(mainTemplate)
@@ -162,11 +183,14 @@ func (g *Generator) renderMain(compose *ComposeFile, fileVolumes []FileVolume, a
 	}
 
 	order := GetOrderedServices(compose)
+	hasEmbed := len(embedServices) > 0
 
 	data := struct {
 		Compose        *ComposeFile
 		Order          []string
 		Embed          bool
+		HasEmbed       bool
+		EmbedServices  map[string]bool
 		Networks       map[string]*Network
 		FileVolumes    []FileVolume
 		HasFileVolumes bool
@@ -175,6 +199,8 @@ func (g *Generator) renderMain(compose *ComposeFile, fileVolumes []FileVolume, a
 		Compose:        compose,
 		Order:          order,
 		Embed:          g.Embed,
+		HasEmbed:       hasEmbed,
+		EmbedServices:  embedServices,
 		Networks:       compose.Networks,
 		FileVolumes:    fileVolumes,
 		HasFileVolumes: len(fileVolumes) > 0,
@@ -186,6 +212,17 @@ func (g *Generator) renderMain(compose *ComposeFile, fileVolumes []FileVolume, a
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// getImageSize returns the size of a Docker image in bytes
+func getImageSize(image string) (int64, error) {
+	out, err := exec.Command("docker", "inspect", "--format={{.Size}}", image).Output()
+	if err != nil {
+		return 0, err
+	}
+	var size int64
+	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &size)
+	return size, nil
 }
 
 func detectFileVolumes(compose *ComposeFile, composeDir string) []FileVolume {
@@ -201,15 +238,13 @@ func detectFileVolumes(compose *ComposeFile, composeDir string) []FileVolume {
 			hostPath := parts[0]
 			mountPath := parts[1]
 
-			// Skip named volumes (no ./ or /)
 			if !strings.HasPrefix(hostPath, "./") && !strings.HasPrefix(hostPath, "/") && !strings.HasPrefix(hostPath, "../") {
 				continue
 			}
 
-			// Check if it's a file (not a directory)
 			absPath := filepath.Join(composeDir, hostPath)
 			info, err := os.Stat(absPath)
-			isFile := err != nil || !info.IsDir() // treat missing as file too
+			isFile := err != nil || !info.IsDir()
 
 			if isFile && !seen[vol] {
 				seen[vol] = true
@@ -246,7 +281,6 @@ func collectPorts(compose *ComposeFile) []string {
 	var ports []string
 	for _, svc := range compose.Services {
 		for _, p := range svc.Ports {
-			// Take only host port
 			parts := strings.Split(p, ":")
 			host := parts[0]
 			if !seen[host] {

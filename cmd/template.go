@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-{{- if .Embed}}
+{{- if .HasEmbed}}
 	"bytes"
 	_ "embed"
 {{- end}}
@@ -24,8 +24,8 @@ import (
 {{- end}}
 )
 
-{{- if .Embed}}
-{{- range .Order}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if .Image}}
+{{- if .HasEmbed}}
+{{- range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if index $.EmbedServices $svcName}}
 //go:embed {{$sn}}.tar.gz
 var embedded_{{$sn}} []byte
 {{- end}}{{end}}{{end}}
@@ -50,14 +50,12 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Preflight checks
 	if err := preflight(); err != nil {
 		fmt.Fprintln(os.Stderr, "\n❌", err)
 		fmt.Fprintln(os.Stderr, "\n[compose2exe] Aborting.")
 		os.Exit(1)
 	}
 
-	// Extract embedded file volumes to temp dir
 	if err := extractVolumes(); err != nil {
 		fmt.Fprintln(os.Stderr, "[compose2exe] Error extracting volumes:", err)
 		os.Exit(1)
@@ -77,14 +75,12 @@ func main() {
 func preflight() error {
 	fmt.Println("[compose2exe] Checking environment...")
 
-	// Check Docker is installed
 	out, err := exec.Command("docker", "--version").Output()
 	if err != nil {
 		return fmt.Errorf("Docker is not installed or not found in PATH.\n  → Please install Docker Desktop from https://www.docker.com/products/docker-desktop/")
 	}
 	fmt.Println(" ✅ Docker found:", strings.TrimSpace(string(out)))
 
-	// Check Docker daemon is running
 	ping := exec.Command("docker", "info")
 	ping.Stdout = io.Discard
 	ping.Stderr = io.Discard
@@ -96,7 +92,6 @@ func preflight() error {
 	}
 	fmt.Println(" ✅ Docker daemon is running")
 
-	// Check required ports
 	ports := []string{ {{range .AllPorts}}"{{.}}", {{end}} }
 	for _, port := range ports {
 		p := port
@@ -141,13 +136,11 @@ func cleanup() {
 }
 
 func run() error {
-	// Create networks
 {{- range $name, $net := .Networks}}
 	fmt.Println("[compose2exe] Creating network: {{$name}}")
 	exec.Command("docker", "network", "create", "{{$name}}").Run()
 {{- end}}
 
-	// Start services in dependency order
 {{- range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if .Image}}
 	if err := start_{{$sn}}(); err != nil {
 		return fmt.Errorf("service {{$svcName}}: %w", err)
@@ -156,7 +149,7 @@ func run() error {
 	return nil
 }
 
-{{range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if or .Image .Build}}
+{{range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if .Image}}
 func start_{{$sn}}() error {
 	image := "{{.Image}}"
 	fmt.Printf("[compose2exe] Starting: {{$svcName}} (%s)\n", image)
@@ -165,7 +158,7 @@ func start_{{$sn}}() error {
 	check.Stdout = io.Discard
 	check.Stderr = io.Discard
 	if check.Run() != nil {
-{{- if $.Embed}}
+{{- if index $.EmbedServices $svcName}}
 		fmt.Println("[compose2exe] Loading embedded image for {{$svcName}}...")
 		load := exec.Command("docker", "load")
 		load.Stdin = bytes.NewReader(embedded_{{$sn}})
@@ -185,7 +178,6 @@ func start_{{$sn}}() error {
 {{- end}}
 	}
 
-	// Check if container already running
 	checkContainer := exec.Command("docker", "inspect", "--type=container", "{{$svcName}}")
 	checkContainer.Stdout = io.Discard
 	checkContainer.Stderr = io.Discard
@@ -195,7 +187,6 @@ func start_{{$sn}}() error {
 		return nil
 	}
 
-	// Remove stopped container with same name if exists
 	exec.Command("docker", "rm", "-f", "{{$svcName}}").Run()
 
 	args := []string{"run", "-d", "--name", "{{$svcName}}"}
@@ -208,8 +199,6 @@ func start_{{$sn}}() error {
 {{- range .Volumes}}{{$vol := .}}
 	{{- range $.FileVolumes}}{{if eq .OriginalVolume $vol}}
 	args = append(args, "-v", filepath.Join(tmpDir, "{{.SafeName}}")+":{{.MountPath}}")
-	{{- else}}{{end}}{{end}}
-	{{- range $.FileVolumes}}{{if eq .OriginalVolume $vol}}{{else}}
 	{{- end}}{{end}}
 {{- end}}
 {{- range .PlainVolumes}}
