@@ -15,10 +15,11 @@ type ComposeFile struct {
 
 type Service struct {
 	Image        string
+	Build        string // build context path (e.g. "." or "./backend")
 	Ports        []string
 	EnvMap       map[string]string
 	Volumes      []string
-	PlainVolumes []string // Volumes that are NOT embedded file volumes
+	PlainVolumes []string
 	NetworkList  []string
 	DependsList  []string
 	Hostname     string
@@ -120,6 +121,9 @@ func ParseCompose(filePath string) (*ComposeFile, error) {
 			if strings.HasPrefix(trimmed, "image:") {
 				currentSvcObj.Image = strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
 				currentSvcObj.Image = strings.Trim(currentSvcObj.Image, "\"'")
+			} else if strings.HasPrefix(trimmed, "build:") {
+				build := strings.TrimSpace(strings.TrimPrefix(trimmed, "build:"))
+				currentSvcObj.Build = strings.Trim(build, "\"'")
 			} else if strings.HasPrefix(trimmed, "hostname:") {
 				currentSvcObj.Hostname = strings.TrimSpace(strings.TrimPrefix(trimmed, "hostname:"))
 			} else if strings.HasPrefix(trimmed, "restart:") {

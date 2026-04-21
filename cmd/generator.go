@@ -36,6 +36,22 @@ func (g *Generator) Run() error {
 
 	composeDir := filepath.Dir(g.ComposePath)
 
+	// Build images for services that use build: instead of image:
+	for name, svc := range compose.Services {
+		if svc.Build != "" && svc.Image == "" {
+			imageName := fmt.Sprintf("%s:latest", sanitize(name))
+			buildContext := filepath.Join(composeDir, svc.Build)
+			fmt.Printf("docker build -t %s %s\n", imageName, buildContext)
+			cmd := exec.Command("docker", "build", "-t", imageName, buildContext)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("docker build %s: %w", name, err)
+			}
+			svc.Image = imageName
+		}
+	}
+
 	// Detect file volumes
 	fileVolumes := detectFileVolumes(compose, composeDir)
 

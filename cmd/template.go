@@ -156,7 +156,7 @@ func run() error {
 	return nil
 }
 
-{{range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if .Image}}
+{{range .Order}}{{$svcName := .}}{{$sn := sanitize .}}{{with index $.Compose.Services .}}{{if or .Image .Build}}
 func start_{{$sn}}() error {
 	image := "{{.Image}}"
 	fmt.Printf("[compose2exe] Starting: {{$svcName}} (%s)\n", image)
