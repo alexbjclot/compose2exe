@@ -1,10 +1,10 @@
 # compose2exe
 
-**[Castellano](#castellano) · [Català](#català) · [English](#english)**
+**[Español](#castellano) · [Català](#català) · [English](#english)**
 
 ---
 
-## Castellano
+## Español
 
 Convierte un `docker-compose.yml` en un único ejecutable binario que cualquiera puede ejecutar.
 
@@ -20,9 +20,11 @@ Inspirado en [docker2exe](https://github.com/rzane/docker2exe), pero con soporte
 | `depends_on` | ❌ | ✅ |
 | Variables de entorno | ❌ | ✅ |
 | Volúmenes | ❌ | ✅ |
+| `build:` automático | ❌ | ✅ |
 | Funciona en Windows | ❌ (bug) | ✅ |
 | Modo embed | ✅ | ✅ |
 | Parada ordenada | ❌ | ✅ |
+| Preflight checks | ❌ | ✅ |
 
 ### Requisitos
 
@@ -51,16 +53,30 @@ compose2exe --compose docker-compose.yml --name miapp --embed --target linux/amd
 ```
 
 Al ejecutar el binario generado:
-1. Crea todas las redes Docker definidas en el compose
-2. Descarga o carga las imágenes
-3. Arranca los contenedores en orden de dependencia (`depends_on`)
-4. Al pulsar `Ctrl+C`, para todos los contenedores en orden inverso
+1. Verifica que Docker está instalado, el daemon está activo y los puertos están disponibles
+2. Crea todas las redes Docker definidas en el compose
+3. Descarga o carga las imágenes
+4. Arranca los contenedores en orden de dependencia (`depends_on`)
+5. Al pulsar `Ctrl+C`, para todos los contenedores en orden inverso
+
+### Servicios con build:
+
+Si tu `docker-compose.yml` usa `build:` en lugar de `image:`, compose2exe construye la imagen automáticamente y la embebe dentro del binario. No es necesario usar `--embed` ni subir la imagen a ningún registro.
+
+```yaml
+services:
+  miapp:
+    build: .   # ← se construye y embebe automáticamente
+    ports:
+      - "3000:3000"
+```
+
+> ⚠️ Si la imagen resultante supera los 2 GB, compose2exe mostrará un error indicando que debes publicar la imagen en un registro y usar `image:` en su lugar.
 
 ### Limitaciones
 
 - El modo embed requiere que cada imagen pese menos de 2 GB (limitación de Go)
-- Los volúmenes de fichero individual pueden requerir que el fichero exista en la máquina destino
-- Los contextos de build (`build:`) no están soportados — usa `image:` en su lugar
+- Los volúmenes de fichero individual se detectan y se embeben automáticamente en el binario
 
 ---
 
@@ -80,9 +96,11 @@ Inspirat en [docker2exe](https://github.com/rzane/docker2exe), però amb suport 
 | `depends_on` | ❌ | ✅ |
 | Variables d'entorn | ❌ | ✅ |
 | Volums | ❌ | ✅ |
+| `build:` automàtic | ❌ | ✅ |
 | Funciona a Windows | ❌ (bug) | ✅ |
 | Mode embed | ✅ | ✅ |
 | Aturada ordenada | ❌ | ✅ |
+| Preflight checks | ❌ | ✅ |
 
 ### Requisits
 
@@ -111,16 +129,30 @@ compose2exe --compose docker-compose.yml --name mevaaplicacio --embed --target l
 ```
 
 En executar el binari generat:
-1. Crea totes les xarxes Docker definides al compose
-2. Descarrega o carrega les imatges
-3. Arrenca els contenidors en ordre de dependència (`depends_on`)
-4. En prémer `Ctrl+C`, atura tots els contenidors en ordre invers
+1. Verifica que Docker està instal·lat, el daemon està actiu i els ports estan disponibles
+2. Crea totes les xarxes Docker definides al compose
+3. Descarrega o carrega les imatges
+4. Arrenca els contenidors en ordre de dependència (`depends_on`)
+5. En prémer `Ctrl+C`, atura tots els contenidors en ordre invers
+
+### Serveis amb build:
+
+Si el teu `docker-compose.yml` usa `build:` en lloc de `image:`, compose2exe construeix la imatge automàticament i l'embeu dins del binari. No cal usar `--embed` ni pujar la imatge a cap registre.
+
+```yaml
+services:
+  mevaaplicacio:
+    build: .   # ← es construeix i s'embeu automàticament
+    ports:
+      - "3000:3000"
+```
+
+> ⚠️ Si la imatge resultant supera els 2 GB, compose2exe mostrarà un error indicant que cal publicar la imatge a un registre i usar `image:` en el seu lloc.
 
 ### Limitacions
 
 - El mode embed requereix que cada imatge pesi menys de 2 GB (limitació de Go)
-- Els volums de fitxer individual poden requerir que el fitxer existeixi a la màquina destí
-- Els contextos de build (`build:`) no estan suportats — usa `image:` en el seu lloc
+- Els volums de fitxer individual es detecten i s'embeguen automàticament al binari
 
 ---
 
@@ -140,9 +172,11 @@ Inspired by [docker2exe](https://github.com/rzane/docker2exe), but with full Doc
 | `depends_on` | ❌ | ✅ |
 | Environment variables | ❌ | ✅ |
 | Volumes | ❌ | ✅ |
+| Automatic `build:` | ❌ | ✅ |
 | Works on Windows | ❌ (bug) | ✅ |
 | Embed mode | ✅ | ✅ |
 | Graceful shutdown | ❌ | ✅ |
+| Preflight checks | ❌ | ✅ |
 
 ### Requirements
 
@@ -171,16 +205,30 @@ compose2exe --compose docker-compose.yml --name myapp --embed --target linux/amd
 ```
 
 When running the generated binary:
-1. Creates all Docker networks defined in the compose file
-2. Pulls or loads images
-3. Starts containers in dependency order (`depends_on`)
-4. On `Ctrl+C`, stops all containers in reverse order
+1. Verifies Docker is installed, the daemon is running and ports are available
+2. Creates all Docker networks defined in the compose file
+3. Pulls or loads images
+4. Starts containers in dependency order (`depends_on`)
+5. On `Ctrl+C`, stops all containers in reverse order
+
+### Services with build:
+
+If your `docker-compose.yml` uses `build:` instead of `image:`, compose2exe builds the image automatically and embeds it inside the binary. No need to use `--embed` or push the image to any registry.
+
+```yaml
+services:
+  myapp:
+    build: .   # ← built and embedded automatically
+    ports:
+      - "3000:3000"
+```
+
+> ⚠️ If the resulting image exceeds 2 GB, compose2exe will return a clear error message indicating that you should push the image to a registry and use `image:` instead.
 
 ### Limitations
 
 - Embed mode requires each image to be under 2 GB (Go `//go:embed` limitation)
-- File-based volume mounts may require the file to exist on the target machine
-- Build contexts (`build:`) are not supported — use `image:` instead
+- File-based volume mounts are automatically detected and embedded inside the binary
 
 ---
 
