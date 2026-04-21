@@ -1,0 +1,4 @@
+compose2exe
+compose2exe.exe
+dist/
+*.tar.gz
